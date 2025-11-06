@@ -1,0 +1,145 @@
+"""Business logic for orchestrating chat interactions."""
+
+from __future__ import annotations
+
+from typing import List
+from uuid import uuid4
+
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.runnables import RunnableSerializable
+from langchain_openai import ChatOpenAI
+
+from app.core.config import Settings
+from app.models.request_response_models import ChatRequest, ChatResponse
+from app.vectorstore.store_setup import VectorStoreManager
+
+
+class ReasoningResult(BaseModel):
+    """Structured output schema expected from the LLM."""
+
+    reasoning_steps: List[str] = Field(
+        ..., description="Step-by-step reasoning leading to the answer."
+    )
+    answer: str = Field(..., description="The final assistant reply the user will see.")
+
+
+class ChatService:
+    """Primary entry point for chat interactions."""
+
+    SYSTEM_PROMPT = (
+        "You are GPT-5, an advanced assistant with strong reasoning skills. "
+        "You must ground answers in the provided context snippets when relevant. "
+        "If the context is empty, rely on your own knowledge but acknowledge when information is missing. "
+        "Respond concisely and helpfully."
+    )
+
+    def __init__(self, settings: Settings, vector_manager: VectorStoreManager) -> None:
+        self._settings = settings
+        self._vector_manager = vector_manager
+        self._parser = JsonOutputParser(pydantic_object=ReasoningResult)
+        self._prompt: RunnableSerializable = self._build_prompt()
+        self._llm = self._build_llm()
+        self._chain = self._prompt | self._llm | self._parser
+
+    def _build_llm(self) -> ChatOpenAI:
+        """Initialise the LangChain ChatOpenAI client."""
+
+        kwargs = {
+            "api_key": self._settings.openai_api_key,
+            "model": self._settings.llm_model,
+            "temperature": self._settings.llm_temperature,
+            "max_retries": 2,
+        }
+        if self._settings.openai_base_url:
+            kwargs["base_url"] = self._settings.openai_base_url
+
+        # Opt-in to structured reasoning output where supported.
+        kwargs["model_kwargs"] = {"reasoning": {"effort": "medium"}}
+
+        return ChatOpenAI(**kwargs)
+
+    def _build_prompt(self) -> RunnableSerializable:
+        """Construct the reusable chat prompt template."""
+
+        template = ChatPromptTemplate.from_messages(
+            [
+                ("system", self.SYSTEM_PROMPT),
+                (
+                    "system",
+                    "Conversation history:\n{conversation_history}\n\nRelevant context:\n{context_snippets}\n",
+                ),
+                (
+                    "human",
+                    "{user_message}\n\nUse the above information and return JSON using the format instructions.\n{format_instructions}",
+                ),
+            ]
+        )
+        return template
+
+    def _prepare_context(self, conversation_id: str, query: str) -> List[str]:
+        """Fetch contextual snippets that may help answer the current query."""
+
+        relevant_docs = self._vector_manager.get_relevant_messages(conversation_id, query)
+        return [
+            f"{doc.metadata.get('role', 'unknown')}: {doc.page_content}"
+            for doc in relevant_docs
+        ]
+
+    def _prepare_history(self, conversation_id: str) -> List[str]:
+        """Return ordered, recent conversation history for grounding context."""
+
+        limit = self._settings.max_context_messages
+        recent_docs = self._vector_manager.get_recent_messages(conversation_id, limit)
+        return [
+            f"{doc.metadata.get('role', 'unknown')}: {doc.page_content}"
+            for doc in recent_docs
+        ]
+
+    def _invoke_chain(
+        self,
+        user_message: str,
+        conversation_id: str,
+        context_snippets: List[str],
+        conversation_history: List[str],
+    ) -> ReasoningResult:
+        """Execute the LangChain pipeline and return the structured result."""
+
+        formatted_history = "\n".join(conversation_history) or "(no prior messages)"
+        formatted_context = "\n".join(context_snippets) or "(no retrieved context)"
+        return self._chain.invoke(
+            {
+                "user_message": user_message,
+                "conversation_history": formatted_history,
+                "context_snippets": formatted_context,
+                "format_instructions": self._parser.get_format_instructions(),
+            }
+        )
+
+    def _store_turn(self, conversation_id: str, user_message: str, response: ReasoningResult) -> None:
+        """Persist the round-trip conversation in the vector store."""
+
+        self._vector_manager.add_message(conversation_id, "user", user_message)
+        self._vector_manager.add_message(conversation_id, "assistant", response.answer)
+
+    def chat(self, request: ChatRequest) -> ChatResponse:
+        """Process a chat request and return the assistant's response."""
+
+        conversation_id = request.conversation_id or str(uuid4())
+        context_snippets = self._prepare_context(conversation_id, request.message)
+        history_snippets = self._prepare_history(conversation_id)
+        reasoning_result = self._invoke_chain(
+            user_message=request.message,
+            conversation_id=conversation_id,
+            context_snippets=context_snippets,
+            conversation_history=history_snippets,
+        )
+        self._store_turn(conversation_id, request.message, reasoning_result)
+
+        return ChatResponse(
+            conversation_id=conversation_id,
+            response=reasoning_result.answer,
+            reasoning_steps=reasoning_result.reasoning_steps,
+            retrieved_context=context_snippets if context_snippets else None,
+        )

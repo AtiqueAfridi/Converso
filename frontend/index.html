@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPT-5 Chatbot</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <header>
+        <h1>GPT-5 Chatbot</h1>
+        <p class="subtitle">FastAPI · LangChain · Vector Memory</p>
+      </header>
+      <main>
+        <section id="chat-window" class="chat-window" aria-live="polite"></section>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <input
+            id="chat-input"
+            type="text"
+            name="message"
+            placeholder="Ask me anything..."
+            required
+            aria-label="Chat input"
+          />
+          <button type="submit">Send</button>
+        </form>
+      </main>
+    </div>
+    <template id="message-template">
+      <div class="message">
+        <div class="message-role"></div>
+        <div class="message-content"></div>
+      </div>
+    </template>
+    <script src="/static/script.js" type="module"></script>
+  </body>
+</html>
