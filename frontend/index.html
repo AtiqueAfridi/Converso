@@ -8,31 +8,98 @@
   </head>
   <body>
     <div class="app-container">
-      <header>
-        <h1>GPT-5 Chatbot</h1>
-        <p class="subtitle">FastAPI · LangChain · Vector Memory</p>
-      </header>
-      <main>
-        <section id="chat-window" class="chat-window" aria-live="polite"></section>
-        <form id="chat-form" class="chat-form" autocomplete="off">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <h2>Conversations</h2>
+          <button id="new-conversation-btn" class="btn-icon" title="New conversation">+</button>
+        </div>
+        <div class="sidebar-search">
           <input
-            id="chat-input"
             type="text"
-            name="message"
-            placeholder="Ask me anything..."
-            required
-            aria-label="Chat input"
+            id="conversation-search"
+            placeholder="Search conversations..."
+            aria-label="Search conversations"
           />
-          <button type="submit">Send</button>
-        </form>
-      </main>
+        </div>
+        <div id="conversations-list" class="conversations-list"></div>
+      </aside>
+
+      <div class="main-content">
+        <header class="conversation-header">
+          <div class="header-left">
+            <h1 id="conversation-title" class="conversation-title" contenteditable="false">
+              New Conversation
+            </h1>
+            <button id="edit-title-btn" class="btn-icon" title="Rename">✏️</button>
+          </div>
+          <div class="header-actions">
+            <button id="export-btn" class="btn-secondary" title="Export conversation">Export</button>
+            <button id="share-btn" class="btn-secondary" title="Share conversation">Share</button>
+            <button id="delete-btn" class="btn-danger" title="Delete conversation">Delete</button>
+          </div>
+        </header>
+
+        <main>
+          <section id="chat-window" class="chat-window" aria-live="polite"></section>
+          <form id="chat-form" class="chat-form" autocomplete="off">
+            <input
+              id="chat-input"
+              type="text"
+              name="message"
+              placeholder="Ask me anything..."
+              required
+              aria-label="Chat input"
+            />
+            <button type="submit">Send</button>
+          </form>
+        </main>
+      </div>
     </div>
+
+    <!-- Modals -->
+    <div id="export-modal" class="modal">
+      <div class="modal-content">
+        <h3>Export Conversation</h3>
+        <div class="modal-actions">
+          <button class="btn-secondary" data-format="txt">Export as TXT</button>
+          <button class="btn-secondary" data-format="json">Export as JSON</button>
+          <button class="btn-secondary" data-format="pdf">Export as PDF</button>
+          <button class="btn-secondary" id="close-export-modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="share-modal" class="modal">
+      <div class="modal-content">
+        <h3>Share Conversation</h3>
+        <div id="share-link-container" style="display: none;">
+          <input type="text" id="share-link-input" readonly />
+          <button class="btn-secondary" id="copy-share-link">Copy Link</button>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-primary" id="generate-share-link">Generate Link</button>
+          <button class="btn-secondary" id="close-share-modal">Close</button>
+        </div>
+      </div>
+    </div>
+
     <template id="message-template">
       <div class="message">
         <div class="message-role"></div>
         <div class="message-content"></div>
       </div>
     </template>
+
+    <template id="conversation-item-template">
+      <div class="conversation-item" data-conversation-id="">
+        <div class="conversation-item-content">
+          <div class="conversation-item-title"></div>
+          <div class="conversation-item-preview"></div>
+          <div class="conversation-item-meta"></div>
+        </div>
+      </div>
+    </template>
+
     <script src="/static/script.js" type="module"></script>
   </body>
 </html>
