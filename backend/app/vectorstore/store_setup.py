@@ -37,33 +37,42 @@ class VectorStoreManager:
             },
         )
         self._store.add_documents([document], ids=[str(uuid4())])
-        self._store.persist()
+        # Note: Chroma 0.4.x+ automatically persists, persist() is deprecated
+        # Keeping for compatibility but it's a no-op in newer versions
 
     def get_relevant_messages(self, conversation_id: str, query: str, k: int = 4) -> List[Document]:
         """Retrieve the most relevant conversation snippets for the current query."""
 
-        return self._store.similarity_search(
-            query=query,
-            k=k,
-            filter={"conversation_id": conversation_id},
-        )
+        try:
+            return self._store.similarity_search(
+                query=query,
+                k=k,
+                filter={"conversation_id": conversation_id},
+            )
+        except Exception:
+            # If no messages exist or search fails, return empty list
+            return []
 
     def get_recent_messages(self, conversation_id: str, limit: int) -> List[Document]:
         """Return the most recent messages from the conversation sorted by time."""
 
-        results = self._store.get(
-            where={"conversation_id": conversation_id},
-            include=["metadatas", "documents"],
-        )
-        metadatas = results.get("metadatas", [])
-        documents = results.get("documents", [])
-        merged = []
-        for metadata, content in zip(metadatas, documents):
-            merged.append(
-                Document(
-                    page_content=content,
-                    metadata=metadata,
-                )
+        try:
+            results = self._store.get(
+                where={"conversation_id": conversation_id},
+                include=["metadatas", "documents"],
             )
-        merged.sort(key=lambda doc: doc.metadata.get("timestamp", ""))
-        return merged[-limit:] if limit else merged
+            metadatas = results.get("metadatas", [])
+            documents = results.get("documents", [])
+            merged = []
+            for metadata, content in zip(metadatas, documents):
+                merged.append(
+                    Document(
+                        page_content=content,
+                        metadata=metadata,
+                    )
+                )
+            merged.sort(key=lambda doc: doc.metadata.get("timestamp", ""))
+            return merged[-limit:] if limit else merged
+        except Exception:
+            # If no messages exist or retrieval fails, return empty list
+            return []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 from uuid import uuid4
 
 from langchain.prompts import ChatPromptTemplate
@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 
 from app.core.config import Settings
 from app.models.request_response_models import ChatRequest, ChatResponse
+from app.repositories.conversation_repository import ConversationRepository
 from app.vectorstore.store_setup import VectorStoreManager
 
 
@@ -35,9 +36,15 @@ class ChatService:
         "Respond concisely and helpfully."
     )
 
-    def __init__(self, settings: Settings, vector_manager: VectorStoreManager) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        vector_manager: VectorStoreManager,
+        conversation_repository: Optional[ConversationRepository] = None,
+    ) -> None:
         self._settings = settings
         self._vector_manager = vector_manager
+        self._conversation_repository = conversation_repository
         self._parser = JsonOutputParser(pydantic_object=ReasoningResult)
         self._prompt: RunnableSerializable = self._build_prompt()
         self._llm = self._build_llm()
@@ -45,6 +52,9 @@ class ChatService:
 
     def _build_llm(self) -> ChatOpenAI:
         """Initialise the LangChain ChatOpenAI client."""
+
+        if not self._settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY must be set in environment or .env file")
 
         kwargs = {
             "api_key": self._settings.openai_api_key,
@@ -55,8 +65,10 @@ class ChatService:
         if self._settings.openai_base_url:
             kwargs["base_url"] = self._settings.openai_base_url
 
-        # Opt-in to structured reasoning output where supported.
-        kwargs["model_kwargs"] = {"reasoning": {"effort": "medium"}}
+        # Note: Reasoning model_kwargs is only supported by certain models (e.g., o1, o3)
+        # For GPT-4o and other standard models, omit this parameter
+        if "o1" in self._settings.llm_model.lower() or "o3" in self._settings.llm_model.lower():
+            kwargs["model_kwargs"] = {"reasoning": {"effort": "medium"}}
 
         return ChatOpenAI(**kwargs)
 
@@ -108,7 +120,7 @@ class ChatService:
 
         formatted_history = "\n".join(conversation_history) or "(no prior messages)"
         formatted_context = "\n".join(context_snippets) or "(no retrieved context)"
-        return self._chain.invoke(
+        result_dict = self._chain.invoke(
             {
                 "user_message": user_message,
                 "conversation_history": formatted_history,
@@ -116,6 +128,19 @@ class ChatService:
                 "format_instructions": self._parser.get_format_instructions(),
             }
         )
+        # JsonOutputParser returns a dict, convert to ReasoningResult
+        if isinstance(result_dict, dict):
+            # Handle case where LLM might not return expected structure
+            if "answer" not in result_dict:
+                # Fallback: use the entire response as answer if structure is wrong
+                answer = result_dict.get("response") or str(result_dict)
+                reasoning_steps = result_dict.get("reasoning_steps", [])
+                if not isinstance(reasoning_steps, list):
+                    reasoning_steps = []
+                return ReasoningResult(answer=answer, reasoning_steps=reasoning_steps)
+            return ReasoningResult(**result_dict)
+        # If it's already a ReasoningResult, return as-is
+        return result_dict
 
     def _store_turn(self, conversation_id: str, user_message: str, response: ReasoningResult) -> None:
         """Persist the round-trip conversation in the vector store."""
@@ -127,6 +152,18 @@ class ChatService:
         """Process a chat request and return the assistant's response."""
 
         conversation_id = request.conversation_id or str(uuid4())
+        
+        # Ensure conversation metadata exists
+        if self._conversation_repository:
+            existing = self._conversation_repository.get(conversation_id)
+            if not existing:
+                # Auto-create conversation metadata if it doesn't exist
+                first_message_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
+                self._conversation_repository.create(
+                    conversation_id=conversation_id,
+                    title=f"Chat: {first_message_preview}",
+                )
+        
         context_snippets = self._prepare_context(conversation_id, request.message)
         history_snippets = self._prepare_history(conversation_id)
         reasoning_result = self._invoke_chain(
@@ -136,6 +173,10 @@ class ChatService:
             conversation_history=history_snippets,
         )
         self._store_turn(conversation_id, request.message, reasoning_result)
+        
+        # Increment message count
+        if self._conversation_repository:
+            self._conversation_repository.increment_message_count(conversation_id)
 
         return ChatResponse(
             conversation_id=conversation_id,

@@ -24,6 +24,12 @@ async def chat(
 ) -> ChatResponse:
     """Process a chat message and return the assistant reply."""
 
+    if not request.message or not request.message.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Message cannot be empty",
+        )
+
     try:
         return chat_service.chat(request)
     except OpenAIError as exc:  # pragma: no cover - third-party exception path
@@ -35,4 +41,9 @@ async def chat(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
+        ) from exc
+    except Exception as exc:  # pragma: no cover - catch-all for unexpected errors
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(exc)}",
         ) from exc

@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+.venv/
+venv/
+env/
+
+.DS_Store
+
+# Editor settings
+.idea/
+.vscode/
+
+# Environment and secrets
+.env
+
+# Vector store persistence
+backend/app/storage/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
