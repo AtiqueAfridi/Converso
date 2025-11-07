@@ -14,6 +14,7 @@ from langchain_openai import ChatOpenAI
 from app.core.config import Settings
 from app.models.request_response_models import ChatRequest, ChatResponse
 from app.repositories.conversation_repository import ConversationRepository
+from app.services.retrieval_service import RetrievalService
 from app.vectorstore.store_setup import VectorStoreManager
 
 
@@ -32,8 +33,10 @@ class ChatService:
     SYSTEM_PROMPT = (
         "You are GPT-5, an advanced assistant with strong reasoning skills. "
         "You must ground answers in the provided context snippets when relevant. "
+        "When document chunks are provided, prioritize information from those documents. "
         "If the context is empty, rely on your own knowledge but acknowledge when information is missing. "
-        "Respond concisely and helpfully."
+        "Respond concisely, clearly, and directly answer the user's intent. "
+        "Highlight key points and avoid unnecessary verbosity."
     )
 
     def __init__(
@@ -41,10 +44,12 @@ class ChatService:
         settings: Settings,
         vector_manager: VectorStoreManager,
         conversation_repository: Optional[ConversationRepository] = None,
+        retrieval_service: Optional[RetrievalService] = None,
     ) -> None:
         self._settings = settings
         self._vector_manager = vector_manager
         self._conversation_repository = conversation_repository
+        self._retrieval_service = retrieval_service
         self._parser = JsonOutputParser(pydantic_object=ReasoningResult)
         self._prompt: RunnableSerializable = self._build_prompt()
         self._llm = self._build_llm()
@@ -80,7 +85,7 @@ class ChatService:
                 ("system", self.SYSTEM_PROMPT),
                 (
                     "system",
-                    "Conversation history:\n{conversation_history}\n\nRelevant context:\n{context_snippets}\n",
+                    "Conversation history:\n{conversation_history}\n\nRelevant context (from conversation and uploaded documents):\n{context_snippets}\n\nWhen document chunks are provided, prioritize them and cite the source document. Structure your response clearly with key points highlighted.",
                 ),
                 (
                     "human",
@@ -91,13 +96,27 @@ class ChatService:
         return template
 
     def _prepare_context(self, conversation_id: str, query: str) -> List[str]:
-        """Fetch contextual snippets that may help answer the current query."""
+        """Fetch contextual snippets from conversation history and uploaded documents."""
 
+        context_snippets = []
+
+        # Get conversation history snippets
         relevant_docs = self._vector_manager.get_relevant_messages(conversation_id, query)
-        return [
-            f"{doc.metadata.get('role', 'unknown')}: {doc.page_content}"
-            for doc in relevant_docs
-        ]
+        for doc in relevant_docs:
+            context_snippets.append(f"{doc.metadata.get('role', 'unknown')}: {doc.page_content}")
+
+        # Get document chunks if retrieval service is available
+        if self._retrieval_service:
+            try:
+                document_chunks = self._retrieval_service.retrieve(query=query, k=3)
+                for chunk in document_chunks:
+                    filename = chunk.metadata.get("filename", "document")
+                    context_snippets.append(f"[Document: {filename}]: {chunk.page_content}")
+            except Exception:
+                # If document retrieval fails, continue without it
+                pass
+
+        return context_snippets
 
     def _prepare_history(self, conversation_id: str) -> List[str]:
         """Return ordered, recent conversation history for grounding context."""
